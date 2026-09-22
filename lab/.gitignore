@@ -1,0 +1,5 @@
+# Everything the harness downloads or produces. Real files, but not ours to ship.
+samples/
+roundtrip/
+generated/
+reports/

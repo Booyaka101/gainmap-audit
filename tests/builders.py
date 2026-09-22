@@ -13,6 +13,7 @@ import struct
 
 SOI = b"\xff\xd8"
 EOI = b"\xff\xd9"
+MPF_ID = b"MPF\x00"
 
 
 def app_segment(marker: int, payload: bytes) -> bytes:
@@ -122,7 +123,27 @@ def mpf_app2(entries: list[tuple[int, int, int]], big_endian: bool = True) -> by
         for attribute, size, offset in entries
     )
     body = tiff_header + ifd + mp_entries
-    return app_segment(0xE2, b"MPF\x00" + body)
+    return app_segment(0xE2, MPF_ID + body)
+
+
+def concat_mpf(app_segments: list[bytes], secondary_body: bytes, attribute: int = 0) -> bytes:
+    """A real primary+secondary JPEG pair with a correct MPF data_offset.
+
+    The entry's data_offset is relative to the MP Header, which only exists once
+    the MPF segment has been laid out, so the primary is measured with a
+    placeholder before the real segment is written. ``attribute`` sets the
+    secondary's MP attribute, e.g. 0x010001 to label it a thumbnail.
+    """
+
+    def build(primary_size: int, data_offset: int) -> bytes:
+        entries = [(0x030000, primary_size, 0), (attribute, len(secondary_body), data_offset)]
+        return jpeg_bytes([*app_segments, mpf_app2(entries)])
+
+    probe = build(0, 0)
+    base = 2 + sum(len(s) for s in app_segments) + 4 + len(MPF_ID)
+    data = build(len(probe), len(probe) - base)
+    assert len(data) == len(probe)
+    return data + secondary_body
 
 
 def iso_app2(

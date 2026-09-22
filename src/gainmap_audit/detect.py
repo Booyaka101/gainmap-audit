@@ -197,7 +197,7 @@ def _classify_jpeg(window: FileWindow, path: Path) -> FileReport:
         for packet in jpeg.collect_xmp(image)
     ]
 
-    _rule_ultrahdr(found, primary, primary_xmp, index)
+    _rule_ultrahdr(found, images, primary_xmp, index)
     _rule_iso_jpeg(found, primary)
     _rule_apple_jpeg(found, secondary_xmp, index)
     _rule_orphaned(found, index, secondary_xmp)
@@ -208,23 +208,33 @@ def _classify_jpeg(window: FileWindow, path: Path) -> FileReport:
 
 def _rule_ultrahdr(
     found: _Findings,
-    primary: jpeg.JpegImage,
+    images: tuple[jpeg.JpegImage, ...],
     packets: list[xmp.Xmp],
     index: jpeg.MpfIndex | None,
 ) -> None:
-    """Rule 1: ``hdrgm:Version`` in the primary image's XMP identifies Ultra HDR."""
+    """Rule 1: ``hdrgm:Version`` in the primary image's XMP identifies Ultra HDR.
+
+    The claim on its own is not enough. An editor that re-encodes the primary and
+    copies its XMP across leaves the metadata naming a gain map the file no longer
+    carries, which is orphaned rather than Ultra HDR.
+    """
+    primary = images[0]
     for position, packet in enumerate(packets):
         version = packet.get(xmp.HDRGM_NS, "Version")
         if version is None:
             continue
         declared = "declared" if packet.declares(xmp.HDRGM_NS) else "undeclared"
         offset = jpeg.collect_xmp(primary)[position].offset
-        found.fire(
-            ULTRAHDR,
-            f'hdrgm:Version="{version}" in the primary XMP ({declared} namespace)',
-            offset,
-            _container_gain_map(packet, index),
-        )
+        claim = f'hdrgm:Version="{version}" in the primary XMP ({declared} namespace)'
+        gain_map = _container_gain_map(packet, index, images)
+        if gain_map is None:
+            found.fire(
+                ORPHANED,
+                f"{claim}, but no image in the file holds the gain map it names",
+                offset,
+            )
+        else:
+            found.fire(ULTRAHDR, claim, offset, gain_map)
         item = packet.gain_map_item()
         if item is not None:
             found.note(
@@ -237,15 +247,31 @@ def _rule_ultrahdr(
         return
 
 
-def _container_gain_map(packet: xmp.Xmp, index: jpeg.MpfIndex | None) -> GainMap | None:
+def _container_gain_map(
+    packet: xmp.Xmp, index: jpeg.MpfIndex | None, images: tuple[jpeg.JpegImage, ...]
+) -> GainMap | None:
+    """Locate the payload the primary XMP claims, or None if no image holds it."""
     item = packet.gain_map_item()
-    secondary = index.gain_map_candidates[0] if index and index.gain_map_candidates else None
-    if item is None and secondary is None:
+    if index is None:
+        # walk() found the secondaries by scanning for the next SOI, which is what an
+        # Ultra HDR file looks like once something has stripped its MPF segment.
+        entry = None
+        offset = images[1].offset if len(images) > 1 else None
+        source = "appended"
+    else:
+        # An MPF entry only locates a payload if an image really parsed there. A file
+        # truncated after the primary keeps the entry and loses the bytes, and an entry
+        # MPF labels a thumbnail was never the gain map to begin with.
+        parsed = {image.offset for image in images[1:]}
+        entry = next((c for c in index.gain_map_candidates if c.offset in parsed), None)
+        offset = entry.offset if entry else None
+        source = "mpf"
+    if offset is None:
         return None
     return GainMap(
-        source="gcontainer+mpf" if item and secondary else ("gcontainer" if item else "mpf"),
-        offset=secondary.offset if secondary else None,
-        length=(item.length if item and item.length else (secondary.size if secondary else None)),
+        source=f"gcontainer+{source}" if item else source,
+        offset=offset,
+        length=item.length if item and item.length else (entry.size if entry else None),
         mime=item.mime if item else "image/jpeg",
     )
 
