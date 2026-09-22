@@ -28,10 +28,7 @@ MPF_ID = b"MPF\x00"
 
 # MPEntry attribute bits, MPF spec (CIPA DC-007) table 4.
 _MP_TYPE_MASK = 0x00FFFFFF
-_MP_REPRESENTATIVE = 1 << 29
 
-MP_TYPE_PRIMARY = 0x030000
-MP_TYPE_UNDEFINED = 0x000000
 # Secondaries a gain map would never be stored as.
 MP_TYPE_NON_GAINMAP = frozenset({0x010001, 0x010002, 0x020001, 0x020002, 0x020003})
 
@@ -65,10 +62,6 @@ class MpfImage:
     @property
     def mp_type(self) -> int:
         return self.attribute & _MP_TYPE_MASK
-
-    @property
-    def is_representative(self) -> bool:
-        return bool(self.attribute & _MP_REPRESENTATIVE)
 
     @property
     def could_be_gain_map(self) -> bool:

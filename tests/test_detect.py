@@ -15,6 +15,7 @@ from builders_isobmff import (
     iinf,
     infe,
     ipco,
+    ipma,
     iprp,
     iref,
     iref_entry,
@@ -209,6 +210,31 @@ def test_apple_aux_heif_rule_fires_on_auxc(tmp_path):
     report = detect.classify(path)
     assert report.state == detect.APPLE_AUX
     assert report.gain_map.item_id == 2
+
+
+def test_apple_aux_heif_rule_picks_gain_map_item_not_depth_item(tmp_path):
+    # A file with two auxiliary images (depth map listed first, gain map
+    # second) must report the gain map's item_id, resolved through the real
+    # ipco/ipma association, not the first item that merely has an auxl ref.
+    depth_type = "urn:mpeg:mpegB:cicp:aux:disparity"
+    props = ipco([auxc(depth_type), auxc(detect.isobmff.APPLE_GAIN_MAP_AUX)])
+    meta_children = [
+        pitm(1),
+        iinf(
+            [
+                infe(1, "hvc1", b"Primary"),
+                infe(2, "hvc1", b"Depth"),
+                infe(3, "hvc1", b"GainMap"),
+            ]
+        ),
+        iref([iref_entry("auxl", 2, [1]), iref_entry("auxl", 3, [1])]),
+        iprp([props, ipma([(2, [1]), (3, [2])])]),
+    ]
+    data = isobmff_file("heic", ["heic", "mif1"], meta_children)
+    path = _write(tmp_path, data, "depth_and_gainmap.heic")
+    report = detect.classify(path)
+    assert report.state == detect.APPLE_AUX
+    assert report.gain_map.item_id == 3
 
 
 def test_apple_aux_urn_scan_fallback_when_no_meta_box(tmp_path):

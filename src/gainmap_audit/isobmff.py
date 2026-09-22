@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import struct
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .reader import FileWindow
 
@@ -67,7 +67,9 @@ class MetaBox:
     items: tuple[ItemInfo, ...]
     references: tuple[ItemReference, ...]
     aux_types: tuple[str, ...]
-    box_types: tuple[str, ...]
+    # aux_type string -> item_ids that carry it via a real ipco/ipma association,
+    # in ipma entry order. Empty when the file has no ipma (or it didn't parse).
+    aux_type_items: dict[str, tuple[int, ...]] = field(default_factory=dict)
 
     def items_of_type(self, item_type: str) -> tuple[ItemInfo, ...]:
         return tuple(i for i in self.items if i.item_type == item_type)
@@ -82,6 +84,14 @@ class MetaBox:
         return tuple(
             r.from_id for r in self.references if r.type == ref_type and item_id in r.to_ids
         )
+
+    def items_with_aux_type(self, aux_type: str) -> tuple[int, ...]:
+        """Items whose ipco/ipma association actually declares this auxC type.
+
+        Distinct from checking ``aux_type in aux_types``, which only says the
+        type exists *somewhere* under iprp>ipco, not which item it belongs to.
+        """
+        return self.aux_type_items.get(aux_type, ())
 
 
 def is_isobmff(head: bytes) -> bool:
@@ -174,10 +184,10 @@ def read_meta(win: FileWindow) -> MetaBox | None:
     items: tuple[ItemInfo, ...] = ()
     references: tuple[ItemReference, ...] = ()
     aux_types: list[str] = []
-    box_types: list[str] = []
+    properties: tuple[Box, ...] = ()
+    associations: dict[int, tuple[int, ...]] = {}
 
     for box in walk(win, start, end, depth=1):
-        box_types.append(box.type)
         if box.type == "pitm":
             primary = _parse_pitm(box.payload)
         elif box.type == "iinf":
@@ -188,8 +198,70 @@ def read_meta(win: FileWindow) -> MetaBox | None:
             aux = _parse_auxc(box.payload)
             if aux:
                 aux_types.append(aux)
+        elif box.type == "ipco":
+            # Direct children only, in file order: ipma property_index is
+            # 1-based into exactly this sequence (ISO/IEC 14496-12 8.11.14).
+            properties = tuple(iter_boxes(win, box.body_offset, box.offset + box.size))
+        elif box.type == "ipma":
+            associations.update(_parse_ipma(box.payload))
 
-    return MetaBox(meta.offset, primary, items, references, tuple(aux_types), tuple(box_types))
+    aux_type_items = _resolve_aux_associations(properties, associations)
+    return MetaBox(
+        meta.offset,
+        primary,
+        items,
+        references,
+        tuple(aux_types),
+        aux_type_items,
+    )
+
+
+def _resolve_aux_associations(
+    properties: tuple[Box, ...], associations: dict[int, tuple[int, ...]]
+) -> dict[str, tuple[int, ...]]:
+    result: dict[str, list[int]] = {}
+    for item_id, indices in associations.items():
+        for index in indices:
+            if not 1 <= index <= len(properties):
+                continue
+            prop = properties[index - 1]
+            if prop.type != "auxC":
+                continue
+            aux_type = _parse_auxc(prop.payload)
+            if aux_type:
+                result.setdefault(aux_type, []).append(item_id)
+    return {aux_type: tuple(item_ids) for aux_type, item_ids in result.items()}
+
+
+def _parse_ipma(payload: bytes) -> dict[int, tuple[int, ...]]:
+    """ItemPropertyAssociationBox: item_id -> the 1-based indices of its properties."""
+    if len(payload) < 8:
+        return {}
+    version = payload[0]
+    flags = int.from_bytes(payload[1:4], "big")
+    (entry_count,) = struct.unpack(">I", payload[4:8])
+    id_width = 2 if version < 1 else 4
+    index_width = 2 if flags & 1 else 1
+    index_mask = 0x7FFF if flags & 1 else 0x7F
+
+    result: dict[int, tuple[int, ...]] = {}
+    pos = 8
+    for _ in range(entry_count):
+        if pos + id_width + 1 > len(payload):
+            break
+        item_id = int.from_bytes(payload[pos : pos + id_width], "big")
+        pos += id_width
+        assoc_count = payload[pos]
+        pos += 1
+        indices = []
+        for _ in range(assoc_count):
+            if pos + index_width > len(payload):
+                break
+            raw = int.from_bytes(payload[pos : pos + index_width], "big")
+            pos += index_width
+            indices.append(raw & index_mask)
+        result[item_id] = tuple(indices)
+    return result
 
 
 def _parse_pitm(payload: bytes) -> int | None:

@@ -52,6 +52,34 @@ def test_fallback_prefix_used_when_xmlns_declaration_missing():
     assert x.get(HDRGM_NS, "Version") == "1.0"
 
 
+def test_prefix_that_is_a_suffix_of_another_prefix_is_not_mismatched():
+    # A packet that declares an unrelated "xhdrgm" namespace and writes
+    # xhdrgm:Version must not satisfy a lookup for the real hdrgm:Version,
+    # even though "hdrgm:Version" is textually a substring of the former.
+    text = (
+        '<rdf:Description xmlns:xhdrgm="http://example.com/unrelated/1.0/" '
+        'xhdrgm:Version="99"></rdf:Description>'
+    )
+    x = Xmp(text)
+    assert not x.declares(HDRGM_NS)
+    assert x.get(HDRGM_NS, "Version") is None
+
+
+def test_default_prefix_is_not_used_as_fallback_when_claimed_by_another_namespace():
+    # "hdrgm" is only the conventional prefix by convention. If this packet
+    # bound it to a totally unrelated namespace instead, and never declared
+    # the real HDRGM_NS at all, an hdrgm:Version attribute belongs to that
+    # other namespace and must not be read as the Adobe gain map property.
+    text = (
+        '<rdf:Description xmlns:hdrgm="http://example.com/unrelated-vendor/1.0/" '
+        'hdrgm:Version="99"></rdf:Description>'
+    )
+    x = Xmp(text)
+    assert not x.declares(HDRGM_NS)
+    assert x.prefixes_for(HDRGM_NS) == []
+    assert x.get(HDRGM_NS, "Version") is None
+
+
 def test_custom_prefix_binding_is_honored():
     text = (
         '<rdf:Description xmlns:gainmap="http://ns.adobe.com/hdr-gain-map/1.0/" '

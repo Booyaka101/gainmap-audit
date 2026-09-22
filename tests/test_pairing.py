@@ -140,6 +140,27 @@ def test_build_pairs_ambiguous_multiple_exports_same_stem():
     assert pairs[0].ambiguous
 
 
+def test_build_pairs_ambiguous_multiple_sources_same_stem():
+    # A dual-format capture (HEIC + JPG saved under the same name) must not
+    # silently collapse to reports[pair.sources[0]] and drop the other file.
+    sources = [Path("a/x.heic"), Path("a/x.jpg")]
+    exports = [Path("b/x.png")]
+    pairs = pairing.build_pairs(sources, exports, Path("a"), Path("b"), "stem")
+    assert len(pairs) == 1
+    assert pairs[0].ambiguous
+
+    reports = {
+        sources[0]: _report(detect.APPLE_AUX, "a/x.heic"),
+        sources[1]: _report(detect.NONE, "a/x.jpg"),
+        exports[0]: _report(detect.NONE, "b/x.png"),
+    }
+    diffs = pairing.diff_pair(pairs[0], reports)
+    assert len(diffs) == 1
+    assert diffs[0].verdict == pairing.AMBIGUOUS
+    assert len(diffs[0].extra_sources) == 1
+    assert diffs[0].extra_sources[0].path == Path("a/x.jpg")
+
+
 def test_diff_pair_unpaired_and_ambiguous():
     src = Path("a/x.jpg")
     reports = {src: _report(detect.NONE, "a/x.jpg")}

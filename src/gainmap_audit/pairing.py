@@ -53,7 +53,12 @@ class Pair:
 
     @property
     def ambiguous(self) -> bool:
-        return len(self.exports) > 1 and len(self.sources) >= 1
+        # Either side can collide on a key: two source formats saved under
+        # the same stem (HEIC + JPG from a dual-format capture) are just as
+        # ambiguous as two exports matching one source.
+        return bool(self.sources) and bool(self.exports) and (
+            len(self.sources) > 1 or len(self.exports) > 1
+        )
 
     @property
     def unpaired_source(self) -> bool:
@@ -151,6 +156,7 @@ class Diff:
     source: FileReport | None
     export: FileReport | None
     extra_exports: tuple[FileReport, ...] = ()
+    extra_sources: tuple[FileReport, ...] = ()
 
 
 def diff_pair(pair: Pair, reports: dict[Path, FileReport]) -> list[Diff]:
@@ -160,8 +166,9 @@ def diff_pair(pair: Pair, reports: dict[Path, FileReport]) -> list[Diff]:
     if pair.unpaired_export:
         return [Diff(pair.stem, UNPAIRED_EXPORT, None, reports[pair.exports[0]])]
     if pair.ambiguous:
+        sources = tuple(reports[p] for p in pair.sources)
         exports = tuple(reports[p] for p in pair.exports)
-        return [Diff(pair.stem, AMBIGUOUS, reports[pair.sources[0]], exports[0], exports[1:])]
+        return [Diff(pair.stem, AMBIGUOUS, sources[0], exports[0], exports[1:], sources[1:])]
     source = reports[pair.sources[0]]
     export = reports[pair.exports[0]]
     return [Diff(pair.stem, verdict(source, export), source, export)]

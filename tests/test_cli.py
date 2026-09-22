@@ -144,6 +144,23 @@ def test_diff_json_schema(tmp_path, capsys):
     assert pair["export"]["state"] == "none"
 
 
+def test_diff_error_pair_exits_findings_even_though_error_not_in_default_fail_on(tmp_path, capsys):
+    # "error" isn't in DEFAULT_FAIL_ON, but an unreadable file in a diff pair
+    # must still fail the run the same way check/scan force exit 1 on ERROR,
+    # instead of silently exiting 0 because no --fail-on value matched.
+    source_dir = tmp_path / "src"
+    export_dir = tmp_path / "export"
+    source_dir.mkdir()
+    export_dir.mkdir()
+    (source_dir / "broken.jpg").write_bytes(b"")  # empty file -> detect.ERROR
+    (export_dir / "broken.jpg").write_bytes(jpeg_bytes([]))
+
+    code = cli.main(["diff", str(source_dir), str(export_dir)])
+    out = capsys.readouterr().out
+    assert code == cli.EXIT_FINDINGS
+    assert "ERROR" in out
+
+
 def test_diff_unpaired_source_and_export(tmp_path, capsys):
     source_dir = tmp_path / "src"
     export_dir = tmp_path / "export"

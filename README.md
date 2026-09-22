@@ -73,7 +73,7 @@ $ gmaudit check IMG_0421.HEIC --json
         {"rule": "ftyp", "detail": "brands heic, mif1, MiHE, miaf, MiHB", "offset": 0},
         {
           "rule": "apple-aux",
-          "detail": "auxC aux_type urn:com:apple:photo:2020:aux:hdrgainmap under iprp>ipco; iref auxl from item 10",
+          "detail": "ipma links item 10 to auxC aux_type urn:com:apple:photo:2020:aux:hdrgainmap; iref auxl -> base item 7",
           "offset": 36
         }
       ],
@@ -126,7 +126,7 @@ Each pair gets one of:
 | `SDR-BOTH` | neither side has one |
 | `UNPAIRED-SOURCE` | no matching export found |
 | `UNPAIRED-EXPORT` | no matching source found |
-| `AMBIGUOUS` | more than one export matched the same source |
+| `AMBIGUOUS` | more than one file on either side shares the same pairing key |
 | `ERROR` | one side couldn't be read/parsed |
 
 ### Global options
@@ -142,7 +142,7 @@ Each pair gets one of:
 ### Exit codes
 
 - `0` -- ran clean, nothing matched `--fail-on`.
-- `1` -- at least one file/pair matched `--fail-on` (or errored, for `check`/`scan`).
+- `1` -- at least one file/pair matched `--fail-on`, or one couldn't be read/parsed at all.
 - `2` -- usage error: bad flags, missing directory, unreadable arguments.
 
 ## What it detects

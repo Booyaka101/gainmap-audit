@@ -10,6 +10,7 @@ from pathlib import Path
 
 from . import __version__, detect, report
 from .detect import FileReport
+from .pairing import ERROR as PAIR_ERROR
 from .pairing import build_pairs, diff_pair, iter_image_files
 
 EXIT_OK = 0
@@ -155,7 +156,7 @@ def _run_diff(args: argparse.Namespace, fail_on: frozenset[str]) -> int:
 
     diffs = [d for pair in pairs for d in diff_pair(pair, reports)]
     _emit(diffs, args, report.write_diff_table, report.diff_json, report.diff_csv_rows)
-    return _exit_code(any(d.verdict in fail_on for d in diffs))
+    return _exit_code(any(d.verdict in fail_on or d.verdict == PAIR_ERROR for d in diffs))
 
 
 def _require_dir(raw: str) -> Path:

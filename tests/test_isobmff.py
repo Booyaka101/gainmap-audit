@@ -9,6 +9,7 @@ from builders_isobmff import (
     iinf,
     infe,
     ipco,
+    ipma,
     iprp,
     iref,
     iref_entry,
@@ -70,6 +71,44 @@ def test_apple_auxc_gain_map_with_auxl_reference(tmp_path):
     assert m.aux_types == (bmff.APPLE_GAIN_MAP_AUX,)
     assert m.references_from(2, "auxl") == (1,)
     assert m.references_to(1, "auxl") == (2,)
+
+
+def test_ipma_picks_the_right_item_among_several_aux_images(tmp_path):
+    # A Portrait-mode HDR photo carries both a depth map and a gain map as
+    # auxiliary images. Without resolving ipco/ipma, "first item with any
+    # auxl reference" picks item 2 (depth), not item 3 (the real gain map).
+    depth_type = "urn:mpeg:mpegB:cicp:aux:disparity"
+    props = ipco([auxc(depth_type), auxc(bmff.APPLE_GAIN_MAP_AUX)])
+    meta_children = [
+        pitm(1),
+        iinf(
+            [
+                infe(1, "hvc1", b"Primary"),
+                infe(2, "hvc1", b"Depth"),
+                infe(3, "hvc1", b"GainMap"),
+            ]
+        ),
+        iref([iref_entry("auxl", 2, [1]), iref_entry("auxl", 3, [1])]),
+        iprp([props, ipma([(2, [1]), (3, [2])])]),
+    ]
+    data = isobmff_file("heic", ["heic", "mif1"], meta_children)
+    with _window(tmp_path, data) as win:
+        m = bmff.read_meta(win)
+    assert m is not None
+    assert m.items_with_aux_type(depth_type) == (2,)
+    assert m.items_with_aux_type(bmff.APPLE_GAIN_MAP_AUX) == (3,)
+
+
+def test_items_with_aux_type_empty_without_ipma(tmp_path):
+    props = ipco([auxc(bmff.APPLE_GAIN_MAP_AUX)])
+    data = isobmff_file(
+        "heic", ["heic", "mif1"], [pitm(1), iinf([infe(1, "hvc1", b"")]), iprp([props])]
+    )
+    with _window(tmp_path, data) as win:
+        m = bmff.read_meta(win)
+    assert m is not None
+    assert m.aux_types == (bmff.APPLE_GAIN_MAP_AUX,)
+    assert m.items_with_aux_type(bmff.APPLE_GAIN_MAP_AUX) == ()
 
 
 def test_no_meta_box_returns_none(tmp_path):

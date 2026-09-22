@@ -397,24 +397,39 @@ def _rule_iso_heif(
 
 
 def _rule_apple_heif(found: _Findings, meta: isobmff.MetaBox) -> None:
-    """Rule 4, HEIF half: an ``auxC`` naming the Apple gain map URN."""
+    """Rule 4, HEIF half: an ``auxC`` naming the Apple gain map URN.
+
+    A file can carry more than one auxiliary image (a depth map alongside a
+    gain map is common on Portrait-mode HDR photos), so the item that
+    actually owns the gain-map auxC is resolved through ipco/ipma, not
+    guessed as "whichever item has some auxl reference".
+    """
     if isobmff.APPLE_GAIN_MAP_AUX not in meta.aux_types:
         return
-    aux_items = [
-        item.item_id
-        for item in meta.items
-        if meta.references_from(item.item_id, "auxl")
-    ]
-    detail = f"auxC aux_type {isobmff.APPLE_GAIN_MAP_AUX} under iprp>ipco"
-    if aux_items:
-        detail += f"; iref auxl from item {aux_items[0]}"
+    linked = meta.items_with_aux_type(isobmff.APPLE_GAIN_MAP_AUX)
+    if linked:
+        gain_item: int | None = linked[0]
+        detail = f"ipma links item {gain_item} to auxC aux_type {isobmff.APPLE_GAIN_MAP_AUX}"
     else:
-        detail += " but no iref auxl links it to the primary item"
+        # No ipma association resolved (writer omitted it, or it didn't parse):
+        # fall back to the first item with any outbound auxl reference at all.
+        fallback = [
+            item.item_id for item in meta.items if meta.references_from(item.item_id, "auxl")
+        ]
+        gain_item = fallback[0] if fallback else None
+        detail = f"auxC aux_type {isobmff.APPLE_GAIN_MAP_AUX} under iprp>ipco, no ipma association"
+        if gain_item is not None:
+            detail += f"; guessing item {gain_item} from its auxl reference"
+    base_items = meta.references_from(gain_item, "auxl") if gain_item is not None else ()
+    if base_items:
+        detail += f"; iref auxl -> base item {base_items[0]}"
+    elif linked:
+        detail += "; no iref auxl links it to a base item"
     found.fire(
         APPLE_AUX,
         detail,
         meta.offset,
-        GainMap(source="auxc-item", item_id=aux_items[0] if aux_items else None),
+        GainMap(source="auxc-item", item_id=gain_item),
     )
 
 

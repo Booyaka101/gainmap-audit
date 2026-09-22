@@ -51,6 +51,15 @@ def ipco(children: list[bytes]) -> bytes:
     return box("ipco", b"".join(children))
 
 
+def ipma(entries: list[tuple[int, list[int]]]) -> bytes:
+    """entries: (item_id, [1-based property indices]); essential bit left unset."""
+    payload = struct.pack(">I", len(entries))
+    for item_id, indices in entries:
+        payload += struct.pack(">HB", item_id, len(indices))
+        payload += b"".join(struct.pack(">B", i & 0x7F) for i in indices)
+    return full_box("ipma", 0, payload)
+
+
 def iprp(children: list[bytes]) -> bytes:
     return box("iprp", b"".join(children))
 

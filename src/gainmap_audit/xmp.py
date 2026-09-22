@@ -54,9 +54,23 @@ class Xmp:
     def prefixes_for(self, namespace: str) -> list[str]:
         declared = self._prefixes.get(namespace, [])
         fallback = _DEFAULT_PREFIXES.get(namespace)
-        if fallback and fallback not in declared:
+        # Only fall back to the conventional prefix if the packet hasn't
+        # bound it to some other, unrelated namespace -- otherwise a vendor
+        # that happens to reuse "hdrgm" for its own schema would get read as
+        # if it were writing Adobe's gain map properties.
+        usable = fallback and fallback not in declared and not self._claimed_by_other(
+            fallback, namespace
+        )
+        if usable:
             declared = [*declared, fallback]
         return declared
+
+    def _claimed_by_other(self, prefix: str, namespace: str) -> bool:
+        return any(
+            prefix in prefixes
+            for uri, prefixes in self._prefixes.items()
+            if uri != namespace
+        )
 
     def get(self, namespace: str, name: str) -> str | None:
         """The property value, whether written as an attribute or an element."""
@@ -86,7 +100,9 @@ class Xmp:
 def _lookup(text: str, prefixes: list[str], name: str) -> str | None:
     for prefix in prefixes:
         qualified = re.escape(f"{prefix}:{name}")
-        attribute = re.search(qualified + r'\s*=\s*["\']([^"\']*)["\']', text)
+        # Unanchored, "hdrgm:Version" would also match inside "xhdrgm:Version"
+        # (a different, unrelated prefix that happens to end the same way).
+        attribute = re.search(r"(?<![:\w])" + qualified + r'\s*=\s*["\']([^"\']*)["\']', text)
         if attribute:
             return attribute.group(1)
         element = re.search(rf"<{qualified}[^>]*>(.*?)</{qualified}>", text, re.DOTALL)

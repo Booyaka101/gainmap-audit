@@ -41,6 +41,8 @@ def write_diff_table(diffs: list[Diff], out: TextIO) -> None:
 def _diff_pair_label(d: Diff) -> str:
     src = d.source.path.name if d.source else f"(no source for {d.stem})"
     dst = d.export.path.name if d.export else f"(no export for {d.stem})"
+    if d.extra_sources:
+        src += f" (+{len(d.extra_sources)} more)"
     if d.extra_exports:
         dst += f" (+{len(d.extra_exports)} more)"
     return f"{src} -> {dst}"
@@ -81,6 +83,7 @@ def diff_json(diffs: list[Diff]) -> dict[str, Any]:
                 "source": d.source.as_dict() if d.source else None,
                 "export": d.export.as_dict() if d.export else None,
                 "extra_exports": [e.as_dict() for e in d.extra_exports],
+                "extra_sources": [e.as_dict() for e in d.extra_sources],
             }
             for d in diffs
         ]
