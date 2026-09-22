@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from builders import (
     apple_aux_xmp,
+    concat_mpf,
     hdrgm_xmp,
     iso_app2,
     jpeg_bytes,
-    mpf_app2,
     xmp_app1,
 )
 from builders_isobmff import (
@@ -32,23 +32,6 @@ def _write(tmp_path, data: bytes, name: str):
     return path
 
 
-def _concat_mpf(primary_app1: bytes, secondary_body: bytes) -> bytes:
-    """A real primary+secondary JPEG pair with a correct MPF data_offset.
-
-    Mirrors the two-pass probe used in test_jpeg.py: the MPF entry offset is
-    relative to the MP Header, which only exists once the MPF segment itself
-    is laid out, so we measure with a placeholder before writing the real one.
-    """
-    probe = jpeg_bytes([primary_app1, mpf_app2([(0x030000, 0, 0), (0, len(secondary_body), 0)])])
-    base = 2 + len(primary_app1) + 4 + len(b"MPF\x00")
-    data_offset = len(probe) - base
-    data = jpeg_bytes(
-        [primary_app1, mpf_app2([(0x030000, len(probe), 0), (0, len(secondary_body), data_offset)])]
-    )
-    assert len(data) == len(probe)
-    return data + secondary_body
-
-
 def test_none_state_for_plain_jpeg(tmp_path):
     path = _write(tmp_path, jpeg_bytes([]), "plain.jpg")
     report = detect.classify(path)
@@ -58,13 +41,47 @@ def test_none_state_for_plain_jpeg(tmp_path):
 
 
 def test_ultrahdr_rule_fires_on_primary_hdrgm_version(tmp_path):
-    data = jpeg_bytes([xmp_app1(hdrgm_xmp(with_container=True))])
+    data = concat_mpf([xmp_app1(hdrgm_xmp(with_container=True))], jpeg_bytes([]))
     path = _write(tmp_path, data, "uhdr.jpg")
     report = detect.classify(path)
     assert report.state == detect.ULTRAHDR
     assert detect.ULTRAHDR in report.rules_fired
     assert report.gain_map is not None
-    assert report.gain_map.source == "gcontainer"
+    assert report.gain_map.source == "gcontainer+mpf"
+    assert report.gain_map.offset is not None
+
+
+def test_hdrgm_version_without_a_payload_is_orphaned(tmp_path):
+    # What Pillow produces when it re-encodes the primary and copies its XMP
+    # across: the metadata still names a gain map, but the file is one image.
+    data = jpeg_bytes([xmp_app1(hdrgm_xmp(with_container=True))])
+    path = _write(tmp_path, data, "xmp-kept.jpg")
+    report = detect.classify(path)
+    assert report.state == detect.ORPHANED
+    assert not report.has_gain_map
+    assert report.gain_map is None
+    assert "no image in the file holds the gain map it names" in report.evidence[0].detail
+
+
+def test_hdrgm_version_with_only_a_thumbnail_secondary_is_orphaned(tmp_path):
+    # MPF labels the secondary a thumbnail, so it is not the payload the XMP names.
+    data = concat_mpf(
+        [xmp_app1(hdrgm_xmp(with_container=True))], jpeg_bytes([]), attribute=0x010001
+    )
+    path = _write(tmp_path, data, "thumb-only.jpg")
+    report = detect.classify(path)
+    assert report.state == detect.ORPHANED
+
+
+def test_ultrahdr_survives_mpf_removal_via_the_soi_scan(tmp_path):
+    # Some tools drop the MPF segment but leave the appended gain map in place.
+    # walk() still finds it by scanning, so the payload is locatable.
+    data = jpeg_bytes([xmp_app1(hdrgm_xmp(with_container=True))]) + jpeg_bytes([])
+    path = _write(tmp_path, data, "no-mpf.jpg")
+    report = detect.classify(path)
+    assert report.state == detect.ULTRAHDR
+    assert report.gain_map.source == "gcontainer+appended"
+    assert report.gain_map.offset is not None
 
 
 def test_iso_jpeg_rule_fires_on_app2_namespace_literal(tmp_path):
@@ -86,7 +103,7 @@ def test_iso_jpeg_prefix_fallback(tmp_path):
 
 
 def test_ultrahdr_outranks_iso_jpeg_when_both_fire(tmp_path):
-    data = jpeg_bytes([xmp_app1(hdrgm_xmp()), iso_app2()])
+    data = concat_mpf([xmp_app1(hdrgm_xmp()), iso_app2()], jpeg_bytes([]))
     path = _write(tmp_path, data, "both.jpg")
     report = detect.classify(path)
     assert report.state == detect.ULTRAHDR
@@ -100,7 +117,7 @@ def test_apple_aux_jpeg_rule_fires_on_mpf_secondary_xmp(tmp_path):
         'xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description/>'
         "</rdf:RDF></x:xmpmeta>"
     )
-    data = _concat_mpf(primary, jpeg_bytes([xmp_app1(apple_aux_xmp())]))
+    data = concat_mpf([primary], jpeg_bytes([xmp_app1(apple_aux_xmp())]))
     path = _write(tmp_path, data, "apple.jpg")
     report = detect.classify(path)
     assert report.state == detect.APPLE_AUX
@@ -114,7 +131,7 @@ def test_orphaned_when_mpf_secondary_stranded(tmp_path):
         "</rdf:RDF></x:xmpmeta>"
     )
     secondary = jpeg_bytes([xmp_app1(hdrgm_xmp())])
-    data = _concat_mpf(primary, secondary)
+    data = concat_mpf([primary], secondary)
     path = _write(tmp_path, data, "orphaned.jpg")
     report = detect.classify(path)
     assert report.state == detect.ORPHANED
@@ -129,7 +146,7 @@ def test_orphaned_when_mpf_secondary_has_no_xmp_at_all(tmp_path):
         "</rdf:RDF></x:xmpmeta>"
     )
     secondary = jpeg_bytes([])
-    data = _concat_mpf(primary, secondary)
+    data = concat_mpf([primary], secondary)
     path = _write(tmp_path, data, "orphaned2.jpg")
     report = detect.classify(path)
     assert report.state == detect.ORPHANED
@@ -142,17 +159,9 @@ def test_thumbnail_mp_type_is_not_orphaned(tmp_path):
         'xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description/>'
         "</rdf:RDF></x:xmpmeta>"
     )
-    secondary = jpeg_bytes([])
     thumb_type = 0x010001  # MPF "large thumbnail" attribute, excluded by MP_TYPE_NON_GAINMAP
-    probe = jpeg_bytes(
-        [primary, mpf_app2([(0x030000, 0, 0), (thumb_type, len(secondary), 0)])]
-    )
-    base = 2 + len(primary) + 4 + len(b"MPF\x00")
-    data_offset = len(probe) - base
-    data = jpeg_bytes(
-        [primary, mpf_app2([(0x030000, len(probe), 0), (thumb_type, len(secondary), data_offset)])]
-    )
-    path = _write(tmp_path, data + secondary, "thumb.jpg")
+    data = concat_mpf([primary], jpeg_bytes([]), attribute=thumb_type)
+    path = _write(tmp_path, data, "thumb.jpg")
     report = detect.classify(path)
     assert report.state == detect.NONE
 

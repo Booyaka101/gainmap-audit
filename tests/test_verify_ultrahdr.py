@@ -1,14 +1,16 @@
 """Cross-verification against libultrahdr's ultrahdr_app.
 
-The plumbing is exercised with a stub binary that mimics the real contract
-(silent exit 0 when it decoded a gain map, non-zero with a message on stderr
-otherwise), which is what was established by running the real thing:
+The plumbing is exercised with a stub binary that mimics the real contract,
+which is what was established by running the real thing (v2.0.2):
 
-    small_uhdr.jpg  -> exit 0, no output
-    sample_srgb.jpg -> exit 127, "input uhdr image does not contain gainmap image"
+    -P on a gain mapped file  -> exit 0, "Ultra HDR Image: Yes" plus the metadata
+    -P on an SDR file         -> exit 127, "input uhdr image does not contain
+                                 gainmap image" on stderr
+    an option it lacks        -> exit 127, "unsupported option -X" plus the usage
 
-``test_real_ultrahdr_app_agrees_with_us`` runs the actual binary when one is
-available, so the stub's contract can't quietly drift away from it.
+Probe mode writes nothing, unlike the -m 1 decode that dumps outrgb.raw into the
+working directory. ``test_real_ultrahdr_app_agrees_with_us`` runs the actual
+binary when one is available, so the stub's contract can't quietly drift.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from builders import hdrgm_xmp, jpeg_bytes, xmp_app1
+from builders import concat_mpf, hdrgm_xmp, jpeg_bytes, xmp_app1
 
 from gainmap_audit import cli
 
@@ -31,18 +33,49 @@ CORPUS = Path(__file__).parent / "corpus"
 _REAL = os.environ.get("GMAUDIT_ULTRAHDR") or shutil.which("ultrahdr_app")
 
 
-def stub(tmp_path: Path, exit_code: int, message: str = "") -> str:
-    """An executable that writes a raw dump to cwd, then reports as told."""
+# What the real binary prints, not what cli.py looks for, so a change to
+# either side has to be reconciled against the measured contract above.
+_NO_GAINMAP_MESSAGE = "input uhdr image does not contain gainmap image"
+_NO_PROBE_MESSAGE = "unsupported option -P"
+
+
+def _probe_guard(probe: str, windows: bool) -> list[str]:
+    """Lines that make the stub fail either with, or without, the -P probe flag."""
+    if probe == "ignore":
+        return []
+    on_probe = probe == "unsupported"
+    message = _NO_PROBE_MESSAGE if on_probe else _NO_GAINMAP_MESSAGE
+    if windows:
+        # findstr sets errorlevel 1 when it found nothing.
+        test = "if not errorlevel 1" if on_probe else "if errorlevel 1"
+        return [
+            'echo %* | findstr /C:" -P" >nul',
+            f"{test} (echo {message} 1>&2 & exit /b 127)",
+        ]
+    compare = "=" if on_probe else "!="
+    return [
+        'case " $*" in *" -P"*) seen=yes ;; *) seen=no ;; esac',
+        f'if [ "$seen" {compare} yes ]; then echo "{message}" >&2; exit 127; fi',
+    ]
+
+
+def stub(tmp_path: Path, exit_code: int, message: str = "", probe: str = "ignore") -> str:
+    """An executable that writes a raw dump to cwd, then reports as told.
+
+    ``probe`` is how it treats -P: "ignore" behaves the same either way,
+    "required" reports no gain map without it, and "unsupported" rejects it the
+    way libultrahdr before 1.5.0 does.
+    """
     if os.name == "nt":
         path = tmp_path / "ultrahdr_app.cmd"
-        lines = ["@echo off", "echo dump> outrgb.raw"]
+        lines = ["@echo off", *_probe_guard(probe, True), "echo dump> outrgb.raw"]
         if message:
             lines.append(f"echo {message} 1>&2")
         lines.append(f"exit /b {exit_code}")
         path.write_text("\r\n".join(lines) + "\r\n", encoding="ascii")
     else:
         path = tmp_path / "ultrahdr_app"
-        lines = ["#!/bin/sh", "echo dump > outrgb.raw"]
+        lines = ["#!/bin/sh", *_probe_guard(probe, False), "echo dump > outrgb.raw"]
         if message:
             lines.append(f'echo "{message}" >&2')
         lines.append(f"exit {exit_code}")
@@ -58,8 +91,10 @@ def verdicts(captured_out: str) -> list[str | None]:
 
 
 def gain_map_jpeg(tmp_path: Path) -> Path:
+    """A real two-image pair, so gmaudit's own verdict is ``ultrahdr`` and a
+    stub reporting "decoded" counts as agreement rather than a disagreement."""
     path = tmp_path / "has_map.jpg"
-    path.write_bytes(jpeg_bytes([xmp_app1(hdrgm_xmp())]))
+    path.write_bytes(concat_mpf([xmp_app1(hdrgm_xmp())], jpeg_bytes([])))
     return path
 
 
@@ -119,18 +154,6 @@ def test_other_failure_is_undecodable_not_a_disagreement(tmp_path, capsys):
     assert "disagreement" not in captured.err
 
 
-def test_raw_dump_does_not_land_in_the_users_photo_directory(tmp_path, monkeypatch, capsys):
-    # ultrahdr_app writes outrgb.raw to its working directory. Run from a photo
-    # folder it would drop a raw frame next to every JPEG it inspected.
-    photos = tmp_path / "photos"
-    photos.mkdir()
-    path = gain_map_jpeg(photos)
-    monkeypatch.chdir(photos)
-    cli.main(["check", "--verify-with-ultrahdr", stub(tmp_path, 0), str(path)])
-    capsys.readouterr()
-    assert sorted(p.name for p in photos.iterdir()) == [path.name]
-
-
 def test_relative_path_still_resolves_from_the_scratch_directory(tmp_path, monkeypatch, capsys):
     # The subprocess runs with cwd set elsewhere, so a relative argument has to
     # be made absolute before being handed over.
@@ -186,3 +209,31 @@ def test_real_ultrahdr_app_agrees_with_us(capsys):
     captured = capsys.readouterr()
     assert verdicts(captured.out) == list(expected.values())
     assert "disagreement" not in captured.err
+
+
+@pytest.mark.parametrize("probe", ["required", "unsupported"])
+def test_probe_is_tried_first_and_the_decode_is_the_fallback(tmp_path, capsys, probe):
+    # "required" only succeeds when it was handed -P, so a decoded verdict proves
+    # the probe was tried. "unsupported" rejects -P the way libultrahdr before
+    # 1.5.0 does, so a decoded verdict proves the fallback ran rather than the
+    # complaint being read as a verdict.
+    path = gain_map_jpeg(tmp_path)
+    binary = stub(tmp_path, 0, probe=probe)
+    cli.main(["check", "--verify-with-ultrahdr", binary, str(path), "--json"])
+    captured = capsys.readouterr()
+    assert verdicts(captured.out) == ["decoded"]
+    assert "disagreement" not in captured.err
+
+
+@pytest.mark.parametrize("probe", ["ignore", "unsupported"])
+def test_no_raw_dump_lands_in_the_users_photo_directory(tmp_path, monkeypatch, capsys, probe):
+    # The decode writes outrgb.raw to its working directory. Run from a photo folder
+    # it would drop a raw frame next to every JPEG it inspected, and the fallback a
+    # build without -P takes has to stay in the scratch directory too.
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    path = gain_map_jpeg(photos)
+    monkeypatch.chdir(photos)
+    cli.main(["check", "--verify-with-ultrahdr", stub(tmp_path, 0, probe=probe), str(path)])
+    capsys.readouterr()
+    assert sorted(p.name for p in photos.iterdir()) == [path.name]

@@ -4,6 +4,39 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.1.2] - 2026-09-22
+
+### Fixed
+- A JPEG whose primary XMP declares `hdrgm:Version` was reported as `ultrahdr`
+  even when the file no longer held a gain map. Pillow, and anything else that
+  re-encodes the primary while carrying the XMP across, produces exactly that
+  file, so `gmaudit diff` reported those round trips as clean. The Ultra HDR
+  rule now needs a payload it can point at, and reports `orphaned` when the
+  metadata names a gain map nothing in the file holds. Found by running the
+  round trip through real image libraries; libultrahdr's own decoder disagreed
+  with `gmaudit` on seven of eight real exports before the fix and none after.
+- An MPF entry whose bytes are gone no longer counts as a located gain map. A
+  file truncated after its primary image kept its MPF index and still reported
+  `ultrahdr` with an offset past the end of the file.
+- An MPF secondary that MPF labels a thumbnail is no longer accepted as the
+  payload an `hdrgm:Version` claim refers to.
+
+### Changed
+- `--verify-with-ultrahdr` uses `ultrahdr_app`'s probe mode (`-P`), which reads
+  the gain map metadata without decoding and writes nothing at all. Builds older
+  than libultrahdr 1.5.0 have no `-P` and report it by name, so those fall back
+  to the full decode in a scratch directory as before.
+- `gain_map.source` names what located the payload: `mpf`, `appended`, or those
+  prefixed `gcontainer+` when the XMP container directory described it too. The
+  bare `gcontainer` source is gone, since a container entry on its own never
+  located anything.
+
+### Added
+- `lab/`, a real-file test environment: around fifty samples from libavif,
+  Awesome-Gain-Maps and libultrahdr, round tripped through Pillow, OpenCV and
+  ffmpeg, plus fresh files encoded by `ultrahdr_app`, all audited and
+  cross-checked against libultrahdr. Not run by CI, and excluded from the sdist.
+
 ## [0.1.1] - 2026-09-22
 
 ### Fixed

@@ -182,10 +182,11 @@ def _emit(items, args, table_writer, json_builder, csv_rows_builder) -> None:
 
 
 _NO_GAINMAP = "does not contain gainmap image"
+_NO_PROBE = "unsupported option -P"
 
 
 def _attach_ultrahdr(reports: list[FileReport], tool: str | None) -> None:
-    """Decode each JPEG with ultrahdr_app and note where it disagrees with us."""
+    """Ask ultrahdr_app about each JPEG and note where it disagrees with us."""
     if tool is None:
         return
     binary = shutil.which(tool) or (tool if Path(tool).is_file() else None)
@@ -198,8 +199,8 @@ def _attach_ultrahdr(reports: list[FileReport], tool: str | None) -> None:
     targets = [r for r in reports if r.container == "jpeg" and r.state != detect.ERROR]
     if not targets:
         return
-    # ultrahdr_app dumps the decoded frame as outrgb.raw into its working
-    # directory, so it runs in a scratch dir rather than the user's photo folder.
+    # Probe mode writes nothing, but the fallback decode dumps outrgb.raw into its
+    # working directory, so this runs in a scratch dir and not the photo folder.
     with tempfile.TemporaryDirectory(prefix="gmaudit-") as scratch:
         for r in targets:
             r.ultrahdr = _run_ultrahdr(binary, r, scratch)
@@ -207,15 +208,15 @@ def _attach_ultrahdr(reports: list[FileReport], tool: str | None) -> None:
 
 def _run_ultrahdr(binary: str, r: FileReport, scratch: str) -> str:
     name = Path(binary).name
+    # Absolute, because cwd is the scratch dir and not where we started.
+    argv = [binary, "-m", "1", "-j", str(r.path.resolve())]
     try:
-        proc = subprocess.run(
-            # Absolute, because cwd is the scratch dir and not where we started.
-            [binary, "-m", "1", "-j", str(r.path.resolve())],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=scratch,
-        )
+        # -P only reads the gain map metadata, so it is both faster and clean. It
+        # arrived in libultrahdr 1.5.0; older builds reject it by name, and get the
+        # full decode instead.
+        proc = _invoke(argv + ["-P"], scratch)
+        if _NO_PROBE in proc.stderr or _NO_PROBE in proc.stdout:
+            proc = _invoke(argv, scratch)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return f"error: could not run {name} ({exc})"
 
@@ -226,8 +227,8 @@ def _run_ultrahdr(binary: str, r: FileReport, scratch: str) -> str:
     elif _NO_GAINMAP in detail:
         theirs = "no-gainmap"
     else:
-        # It refused to render the file without claiming either way, e.g. a gain
-        # map whose XMP is missing hdrgm:GainMapMax. Not a disagreement with us.
+        # It refused to read the file without claiming either way, e.g. a gain map
+        # whose XMP is missing hdrgm:GainMapMax. Not a disagreement with us.
         return f"undecodable: {detail or f'exit {proc.returncode}'}"
 
     if (theirs == "decoded") != r.has_gain_map:
@@ -236,6 +237,10 @@ def _run_ultrahdr(binary: str, r: FileReport, scratch: str) -> str:
             file=sys.stderr,
         )
     return theirs
+
+
+def _invoke(argv: list[str], scratch: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(argv, capture_output=True, text=True, timeout=30, cwd=scratch)
 
 
 if __name__ == "__main__":

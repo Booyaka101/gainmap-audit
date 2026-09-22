@@ -16,7 +16,7 @@ does not repair anything, and does not touch the filesystem except to read.
 If you want to actually rebuild a stripped gain map, that's a job for
 [libultrahdr](https://github.com/google/libultrahdr); `gmaudit` can shell out
 to its `ultrahdr_app` for cross-verification (`--verify-with-ultrahdr`) but
-only ever asks it to decode, never to write a file.
+only ever asks it to read, never to write a file.
 
 ## Install
 
@@ -135,14 +135,15 @@ Each pair gets one of:
 - `--csv PATH` -- also write results as CSV to `PATH`.
 - `--fail-on LIST` -- comma-separated states/verdicts that make the process exit 1.
   Default: `stripped,orphaned`.
-- `--verify-with-ultrahdr [PATH]` -- decode every JPEG with libultrahdr's
-  `ultrahdr_app` (`-m 1 -j FILE`) and record the result alongside our own, with
-  a warning on stderr wherever the two disagree. Looks up `ultrahdr_app` on
-  `PATH` if no argument is given. Reported as `decoded`, `no-gainmap`, or
-  `undecodable: <reason>` for a file it recognises but refuses to render, such
-  as a gain map whose XMP is missing `hdrgm:GainMapMax`. The decode runs in a
-  scratch directory, since `ultrahdr_app` dumps a raw frame into its working
-  directory.
+- `--verify-with-ultrahdr [PATH]` -- ask libultrahdr's `ultrahdr_app` about
+  every JPEG and record its answer alongside our own, with a warning on stderr
+  wherever the two disagree. Looks up `ultrahdr_app` on `PATH` if no argument is
+  given. Reported as `decoded`, `no-gainmap`, or `undecodable: <reason>` for a
+  file it recognises but refuses to read, such as a gain map whose XMP is missing
+  `hdrgm:GainMapMax`. Uses probe mode (`-m 1 -j FILE -P`), which reads the gain
+  map metadata and writes nothing. libultrahdr before 1.5.0 has no `-P` and says
+  so by name, so those builds get the full decode instead, in a scratch directory
+  because that dumps a raw frame into its working directory.
 
 ### Exit codes
 
@@ -172,10 +173,20 @@ state (`ultrahdr` > `iso-jpeg` > `iso-heif` > `apple-aux` > `orphaned`):
    gets flagged rather than silently reported clean.
 
 A fifth state, **`orphaned`**, is not a gain map flavour but a warning: the
-MPF index still lists a second image that looks like a gain map, but nothing
-in the primary XMP points a viewer at it. That's what a half-completed strip
-or a buggy re-encode looks like from the outside, and it's exactly the case
-`--fail-on orphaned` (the default) is there to catch.
+metadata and the payload no longer agree, so no viewer can render the file as
+HDR. It fires both ways round. The MPF index still lists a second image that
+looks like a gain map but nothing in the primary XMP points a viewer at it, or
+the primary XMP names a gain map that no image in the file actually holds.
+
+That second case is what an editor produces when it re-encodes the primary and
+copies the XMP across, and it is the reason `gmaudit` will not call a file
+`ultrahdr` on the strength of an `hdrgm:Version` attribute alone. There has to
+be a payload it can point at: an MPF entry with a real image behind it, or an
+appended image found by scanning. An MPF entry whose bytes are gone is not
+enough, and neither is an entry MPF labels a thumbnail.
+
+`--fail-on orphaned` is on by default because a file in this state has lost its
+HDR rendering just as surely as one that was stripped outright.
 
 `gmaudit` never crashes on a bad file. Truncated, zero-byte, unreadable, or
 non-image files are reported with `state: error` and a reason, not a
@@ -197,6 +208,13 @@ corpus of real sample files (`tests/corpus/`, sourced and licensed per
 real bytes, not just synthetic ones. `tests/test_download_integration.py`
 pulls two more pinned real files over the network and skips cleanly if it
 can't reach them.
+
+`lab/` is a larger environment that CI does not run: it fetches around fifty
+real files from libavif, Awesome-Gain-Maps and libultrahdr, pushes them through
+Pillow, OpenCV and ffmpeg, encodes fresh ones with `ultrahdr_app`, then audits
+the lot and cross-checks every verdict against libultrahdr's own decoder. See
+`lab/README.md`. It needs network access and third-party encoders, which is why
+it is kept out of `tests/`.
 
 ## Limitations
 

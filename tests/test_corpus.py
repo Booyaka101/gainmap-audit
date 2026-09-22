@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from gainmap_audit import detect
+from gainmap_audit import detect, jpeg
+from gainmap_audit.reader import FileWindow
 
 CORPUS = Path(__file__).parent / "corpus"
 
@@ -53,3 +54,38 @@ def test_small_uhdr_carries_mpf_and_iso_app2():
     report = detect.classify(CORPUS / "small_uhdr.jpg")
     assert report.state == detect.ISO_JPEG
     assert any(e.rule == "mpf" for e in report.evidence)
+
+
+def _cut_off_the_gain_map(path: Path) -> bytes:
+    """The real file's primary image alone, with its XMP and MPF segment intact."""
+    with FileWindow(path) as win:
+        images = jpeg.walk(win)
+        assert len(images) == 2, "fixture needs a real two-image file"
+        return win.read_at(0, images[1].offset)
+
+
+def test_real_ultrahdr_without_its_payload_is_orphaned(tmp_path):
+    # An editor that re-encodes the primary and copies the XMP across leaves a file
+    # whose metadata still names a gain map that is not there. Reporting that as
+    # `ultrahdr` would tell someone their round trip was clean when it was not.
+    path = tmp_path / "payload_gone.jpg"
+    path.write_bytes(_cut_off_the_gain_map(CORPUS / "paris_exif_xmp_gainmap_bigendian.jpg"))
+    report = detect.classify(path)
+    assert report.state == detect.ORPHANED
+    assert not report.has_gain_map
+    assert report.gain_map is None
+
+
+def test_every_gain_map_state_has_a_locatable_payload():
+    # The invariant behind the orphaned rule: a state in GAIN_MAP_STATES means we
+    # found the payload, not that the metadata claimed one. JPEG locates it by byte
+    # offset, ISOBMFF by item id.
+    for path in _corpus_files():
+        report = detect.classify(path)
+        if not report.has_gain_map:
+            continue
+        assert report.gain_map is not None, path.name
+        gm = report.gain_map
+        assert gm.offset is not None or gm.item_id is not None, path.name
+        if gm.offset is not None:
+            assert gm.offset < report.size, path.name
