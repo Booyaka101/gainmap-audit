@@ -14,9 +14,9 @@ before you notice months later that your library went dark.
 container metadata, and reports what it finds. It does not decode pixels,
 does not repair anything, and does not touch the filesystem except to read.
 If you want to actually rebuild a stripped gain map, that's a job for
-[`uhdrtool`](https://github.com/google/libultrahdr); `gmaudit` can shell out
-to it for cross-verification (`--verify-with-uhdrtool`) but never invokes it
-to modify a file.
+[libultrahdr](https://github.com/google/libultrahdr); `gmaudit` can shell out
+to its `ultrahdr_app` for cross-verification (`--verify-with-ultrahdr`) but
+only ever asks it to decode, never to write a file.
 
 ## Install
 
@@ -135,9 +135,14 @@ Each pair gets one of:
 - `--csv PATH` -- also write results as CSV to `PATH`.
 - `--fail-on LIST` -- comma-separated states/verdicts that make the process exit 1.
   Default: `stripped,orphaned`.
-- `--verify-with-uhdrtool [PATH]` -- run `uhdrtool detect -in FILE` on every JPEG
-  and print a warning to stderr wherever it disagrees with `gmaudit`'s verdict.
-  Looks up `uhdrtool` on `PATH` if no argument is given.
+- `--verify-with-ultrahdr [PATH]` -- decode every JPEG with libultrahdr's
+  `ultrahdr_app` (`-m 1 -j FILE`) and record the result alongside our own, with
+  a warning on stderr wherever the two disagree. Looks up `ultrahdr_app` on
+  `PATH` if no argument is given. Reported as `decoded`, `no-gainmap`, or
+  `undecodable: <reason>` for a file it recognises but refuses to render, such
+  as a gain map whose XMP is missing `hdrgm:GainMapMax`. The decode runs in a
+  scratch directory, since `ultrahdr_app` dumps a raw frame into its working
+  directory.
 
 ### Exit codes
 
@@ -201,5 +206,6 @@ can't reach them.
 - Pairing across a source and export tree is filename-based (stem or
   relative path). If an export tool renames files unpredictably, pairing
   won't find the match.
-- `--verify-with-uhdrtool` only checks JPEGs, since that's what `uhdrtool`
-  understands.
+- `--verify-with-ultrahdr` only checks JPEGs, since that's what `ultrahdr_app`
+  reads. It also needs a built `ultrahdr_app`, which libultrahdr does not ship
+  as a release binary, so you have to build it yourself.

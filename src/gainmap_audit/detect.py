@@ -82,7 +82,7 @@ class FileReport:
     gain_map: GainMap | None = None
     error: str | None = None
     rules_fired: tuple[str, ...] = ()
-    uhdrtool: str | None = field(default=None, compare=False)
+    ultrahdr: str | None = field(default=None, compare=False)
 
     @property
     def has_gain_map(self) -> bool:
@@ -103,8 +103,8 @@ class FileReport:
             "gain_map": self.gain_map.as_dict() if self.gain_map else None,
             "error": self.error,
         }
-        if self.uhdrtool is not None:
-            data["uhdrtool"] = self.uhdrtool
+        if self.ultrahdr is not None:
+            data["ultrahdr"] = self.ultrahdr
         return data
 
 

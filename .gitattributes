@@ -1,0 +1,10 @@
+# The corpus is real camera and encoder output, and the parsers are tested
+# against exact byte offsets into it. Newline normalisation on a Windows clone
+# would rewrite those bytes, so the image formats are pinned binary rather than
+# left to text=auto's autodetection.
+* text=auto eol=lf
+*.jpg binary
+*.jpeg binary
+*.heic binary
+*.avif binary
+*.png binary

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gainmap-audit"
-version = "0.1.0"
+version = "0.1.1"
 description = "Find photos whose HDR gain map was lost in an editing round trip"
 readme = "README.md"
 license = "MIT"
@@ -50,6 +50,10 @@ gmaudit = "gainmap_audit.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/gainmap_audit"]
+
+[tool.hatch.build.targets.sdist]
+# Tests and the corpus stay in, so the suite is runnable from the sdist.
+exclude = ["PROGRESS.md"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "tests"]

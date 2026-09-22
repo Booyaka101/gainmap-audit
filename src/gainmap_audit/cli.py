@@ -6,6 +6,7 @@ import argparse
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from . import __version__, detect, report
@@ -108,11 +109,12 @@ def _add_global_options(parser: argparse.ArgumentParser) -> None:
         f"(default: {','.join(DEFAULT_FAIL_ON)})",
     )
     parser.add_argument(
-        "--verify-with-uhdrtool",
+        "--verify-with-ultrahdr",
         nargs="?",
-        const="uhdrtool",
+        const="ultrahdr_app",
         metavar="PATH",
-        help="cross-check JPEG verdicts against uhdrtool (default: look up 'uhdrtool' on PATH)",
+        help="cross-check JPEG verdicts by decoding them with libultrahdr's "
+        "ultrahdr_app (default: look it up on PATH)",
     )
 
 
@@ -126,7 +128,7 @@ def _parse_fail_on(raw: str) -> frozenset[str]:
 
 def _run_check(args: argparse.Namespace, fail_on: frozenset[str]) -> int:
     reports = [detect.classify(f) for f in args.files]
-    _attach_uhdrtool(reports, args.verify_with_uhdrtool)
+    _attach_ultrahdr(reports, args.verify_with_ultrahdr)
     _emit(reports, args, report.write_check_table, report.check_json, report.check_csv_rows)
     return _exit_code(any(r.state in fail_on or r.state == detect.ERROR for r in reports))
 
@@ -137,7 +139,7 @@ def _run_scan(args: argparse.Namespace, fail_on: frozenset[str]) -> int:
     if not files:
         print(f"gmaudit: no image files found under {directory}", file=sys.stderr)
     reports = [detect.classify(f) for f in files]
-    _attach_uhdrtool(reports, args.verify_with_uhdrtool)
+    _attach_ultrahdr(reports, args.verify_with_ultrahdr)
     _emit(reports, args, report.write_check_table, report.check_json, report.check_csv_rows)
     return _exit_code(any(r.state in fail_on or r.state == detect.ERROR for r in reports))
 
@@ -152,7 +154,7 @@ def _run_diff(args: argparse.Namespace, fail_on: frozenset[str]) -> int:
 
     all_paths = {p for pair in pairs for p in (*pair.sources, *pair.exports)}
     reports = {path: detect.classify(path) for path in all_paths}
-    _attach_uhdrtool(list(reports.values()), args.verify_with_uhdrtool)
+    _attach_ultrahdr(list(reports.values()), args.verify_with_ultrahdr)
 
     diffs = [d for pair in pairs for d in diff_pair(pair, reports)]
     _emit(diffs, args, report.write_diff_table, report.diff_json, report.diff_csv_rows)
@@ -179,44 +181,61 @@ def _emit(items, args, table_writer, json_builder, csv_rows_builder) -> None:
         report.write_csv(csv_rows_builder(items), args.csv)
 
 
-def _attach_uhdrtool(reports: list[FileReport], tool: str | None) -> None:
-    """Run ``uhdrtool detect`` on JPEGs and note where it disagrees with us."""
+_NO_GAINMAP = "does not contain gainmap image"
+
+
+def _attach_ultrahdr(reports: list[FileReport], tool: str | None) -> None:
+    """Decode each JPEG with ultrahdr_app and note where it disagrees with us."""
     if tool is None:
         return
     binary = shutil.which(tool) or (tool if Path(tool).is_file() else None)
     if binary is None:
         print(
-            f"gmaudit: warning: uhdrtool not found at {tool!r}, skipping verification",
+            f"gmaudit: warning: {tool!r} not found, skipping verification",
             file=sys.stderr,
         )
         return
-    for r in reports:
-        if r.container != "jpeg" or r.state == detect.ERROR:
-            continue
-        r.uhdrtool = _run_uhdrtool(binary, r)
+    targets = [r for r in reports if r.container == "jpeg" and r.state != detect.ERROR]
+    if not targets:
+        return
+    # ultrahdr_app dumps the decoded frame as outrgb.raw into its working
+    # directory, so it runs in a scratch dir rather than the user's photo folder.
+    with tempfile.TemporaryDirectory(prefix="gmaudit-") as scratch:
+        for r in targets:
+            r.ultrahdr = _run_ultrahdr(binary, r, scratch)
 
 
-def _run_uhdrtool(binary: str, r: FileReport) -> str:
+def _run_ultrahdr(binary: str, r: FileReport, scratch: str) -> str:
+    name = Path(binary).name
     try:
         proc = subprocess.run(
-            [binary, "detect", "-in", str(r.path)],
+            # Absolute, because cwd is the scratch dir and not where we started.
+            [binary, "-m", "1", "-j", str(r.path.resolve())],
             capture_output=True,
             text=True,
             timeout=30,
+            cwd=scratch,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return f"error: could not run uhdrtool ({exc})"
+        return f"error: could not run {name} ({exc})"
 
-    verdict = proc.stdout.strip() or proc.stderr.strip() or f"exit {proc.returncode}"
-    theirs_has_map = verdict == "ultrahdr"
-    ours_has_map = r.has_gain_map
-    if proc.returncode == 0 and theirs_has_map != ours_has_map:
+    lines = (proc.stderr.strip() or proc.stdout.strip()).splitlines()
+    detail = lines[-1].strip() if lines else ""
+    if proc.returncode == 0:
+        theirs = "decoded"
+    elif _NO_GAINMAP in detail:
+        theirs = "no-gainmap"
+    else:
+        # It refused to render the file without claiming either way, e.g. a gain
+        # map whose XMP is missing hdrgm:GainMapMax. Not a disagreement with us.
+        return f"undecodable: {detail or f'exit {proc.returncode}'}"
+
+    if (theirs == "decoded") != r.has_gain_map:
         print(
-            f"!! disagreement: {r.path} -- gmaudit says {r.state} "
-            f"({'has' if ours_has_map else 'no'} gain map), uhdrtool says {verdict!r}",
+            f"!! disagreement: {r.path} -- gmaudit says {r.state}, {name} says {theirs}",
             file=sys.stderr,
         )
-    return verdict
+    return theirs
 
 
 if __name__ == "__main__":
