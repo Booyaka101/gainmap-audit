@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from builders import jpeg_bytes
 from builders_isobmff import auxc, iinf, infe, ipco, iprp, iref, iref_entry, isobmff_file, pitm
+from test_corpus import EXPECTED_STATE
 
 from gainmap_audit import cli, detect
 
@@ -69,15 +70,9 @@ def test_scan_corpus_classifies_every_file(capsys):
     assert code == cli.EXIT_OK
     data = json.loads(capsys.readouterr().out)
     names = {Path(f["path"]).name for f in data["files"]}
-    assert names == {
-        "small_uhdr.jpg",
-        "sample_srgb.jpg",
-        "apple_gainmap_new.jpg",
-        "paris_exif_xmp_gainmap_bigendian.jpg",
-        "colors_sdr_srgb.avif",
-        "seine_sdr_gainmap_notmapbrand.avif",
-        "apple_hdr_sample.heic",
-    }
+    # test_corpus.py pins that table against SOURCES.md, so the check here is that
+    # scan walks the directory and leaves nothing out, whatever the corpus holds.
+    assert names == set(EXPECTED_STATE)
     assert all(f["evidence"] for f in data["files"])
 
 

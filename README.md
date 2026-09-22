@@ -88,15 +88,20 @@ $ gmaudit check IMG_0421.HEIC --json
 
 ```
 $ gmaudit scan tests/corpus
-STATE      PATH                                               SIZE    RULES      ERROR
-APPLE-AUX  tests\corpus\apple_gainmap_new.jpg                 50824   apple-aux
-APPLE-AUX  tests\corpus\apple_hdr_sample.heic                 238982  apple-aux
-NONE       tests\corpus\colors_sdr_srgb.avif                  18845   -
-ULTRAHDR   tests\corpus\paris_exif_xmp_gainmap_bigendian.jpg  47579   ultrahdr
-NONE       tests\corpus\sample_srgb.jpg                       154458  -
-ISO-HEIF   tests\corpus\seine_sdr_gainmap_notmapbrand.avif    129769  iso-heif
-ISO-JPEG   tests\corpus\small_uhdr.jpg                        39385   iso-jpeg
-7 files: 2 apple-aux, 2 none, 1 ultrahdr, 1 iso-heif, 1 iso-jpeg
+STATE      PATH                                                   SIZE    RULES      ERROR
+APPLE-AUX  tests\corpus\apple_gainmap_new.jpg                     50824   apple-aux
+APPLE-AUX  tests\corpus\apple_hdr_sample.heic                     238982  apple-aux
+NONE       tests\corpus\circle_auxl_two_targets.avif              986     -
+NONE       tests\corpus\circle_custom_properties.avif             1065    -
+ISO-HEIF   tests\corpus\color_grid_gainmap_different_grid.avif    3101    iso-heif
+NONE       tests\corpus\colors-animated-8bpc-depth-exif-xmp.avif  7506    -
+NONE       tests\corpus\colors_sdr_srgb.avif                      18845   -
+ULTRAHDR   tests\corpus\paris_exif_xmp_gainmap_bigendian.jpg      47579   ultrahdr
+NONE       tests\corpus\paris_xmp_trailing_null.jpg               6862    -
+NONE       tests\corpus\sample_srgb.jpg                           154458  -
+ISO-HEIF   tests\corpus\seine_sdr_gainmap_notmapbrand.avif        129769  iso-heif
+ISO-JPEG   tests\corpus\small_uhdr.jpg                            39385   iso-jpeg
+12 files: 6 none, 2 apple-aux, 2 iso-heif, 1 ultrahdr, 1 iso-jpeg
 ```
 
 Add `-r` / `--recursive` to descend into subdirectories. Hidden directories,
@@ -205,7 +210,10 @@ The test suite builds its own JPEG and ISOBMFF byte streams for unit tests
 corpus of real sample files (`tests/corpus/`, sourced and licensed per
 `tests/corpus/SOURCES.md`), and strips XMP from a real Ultra HDR JPEG inside
 `tests/test_roundtrip.py` to prove the `orphaned` detection actually fires on
-real bytes, not just synthetic ones. `tests/test_download_integration.py`
+real bytes, not just synthetic ones. The corpus includes controls as well as
+samples: real alpha and depth auxiliary images, which are the thing most easily
+mistaken for a gain map, and a real XMP packet terminated by a NUL byte.
+`tests/test_download_integration.py`
 pulls two more pinned real files over the network and skips cleanly if it
 can't reach them.
 
