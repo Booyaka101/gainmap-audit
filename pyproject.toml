@@ -40,10 +40,10 @@ dependencies = []
 dev = ["pytest>=7", "ruff>=0.6"]
 
 [project.urls]
-Homepage = "https://github.com/cbosch101/gainmap-audit"
-Repository = "https://github.com/cbosch101/gainmap-audit"
-Changelog = "https://github.com/cbosch101/gainmap-audit/blob/main/CHANGELOG.md"
-Issues = "https://github.com/cbosch101/gainmap-audit/issues"
+Homepage = "https://github.com/Booyaka101/gainmap-audit"
+Repository = "https://github.com/Booyaka101/gainmap-audit"
+Changelog = "https://github.com/Booyaka101/gainmap-audit/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Booyaka101/gainmap-audit/issues"
 
 [project.scripts]
 gmaudit = "gainmap_audit.cli:main"
